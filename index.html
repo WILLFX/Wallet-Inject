@@ -1,129 +1,120 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>One Button Sepolia Transfer</title>
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; padding: 18px; }
-    button { font-size: 18px; padding: 14px 16px; border-radius: 12px; border: 1px solid #bbb; background: #f7f7f7; }
-    button:disabled { opacity: 0.6; }
-    #log { margin-top: 14px; white-space: pre-wrap; font-size: 14px; }
-    .hint { margin-top: 10px; color: #444; font-size: 13px; }
-  </style>
-
-  <!-- MetaMask SDK (CDN) -->
-  <script src="https://c0f4f41c-2f55-4863-921b-sdk-docs.github.io/cdn/metamask-sdk.js"></script>
-</head>
-<body>
-  <button id="btn">Send 0.1 Sepolia ETH</button>
-  <div class="hint">
-    Edit <b>TO_ADDRESS</b> and (optionally) <b>INFURA_API_KEY</b> before testing.
-  </div>
-  <div id="log"></div>
+<script src="https://unpkg.com/@metamask/sdk/dist/metamask-sdk.js"></script>
 
 <script>
 (() => {
   const btn = document.getElementById("btn");
   const logEl = document.getElementById("log");
 
-  // ✅ Change this
-  const TO_ADDRESS = "0x000000000000000000000000000000000000dEaD";
-
-  // Optional but recommended by MetaMask docs for read-only RPC + load balancing
-  const INFURA_API_KEY = "2e4efadf229d4718933748e0fb680f17"; // put your key here or leave empty
-
-  const SEPOLIA_CHAIN_ID_HEX = "0xaa36a7"; // 11155111
-  const VALUE_WEI_HEX = "0x16345785d8a0000"; // 0.1 ETH in wei
+  const TO_ADDRESS = "0x000000000000000000000000000000000000dEaD"; // replace
+  const SEPOLIA_CHAIN_ID_HEX = "0xaa36a7";
+  const VALUE_WEI_HEX = "0x16345785d8a0000"; // 0.1 ETH
 
   function log(msg) { logEl.textContent += msg + "\n"; }
+  function line() { log("------------------------------------------------"); }
 
-  function requireSDK() {
-    if (!window.MetaMaskSDK || !window.MetaMaskSDK.MetaMaskSDK) {
-      throw new Error("MetaMask SDK not loaded. Check the script tag URL.");
-    }
+  // Basic environment diagnostics
+  function envDump() {
+    log("URL: " + location.href);
+    log("UserAgent: " + navigator.userAgent);
+    log("isSecureContext: " + window.isSecureContext);
+    log("referrer: " + document.referrer);
+    log("visibilityState: " + document.visibilityState);
+    log("hasEthereum: " + !!window.ethereum);
+    log("ethereum.isMetaMask: " + (window.ethereum?.isMetaMask ?? "n/a"));
+    log("MetaMaskSDK global: " + !!window.MetaMaskSDK);
   }
 
-  const MMSDK = new window.MetaMaskSDK.MetaMaskSDK({
-    dappMetadata: {
-      name: "One Button Sepolia Transfer",
-      url: window.location.href,
-    },
-    // You can omit this, but docs recommend it for best reliability
-    ...(INFURA_API_KEY ? { infuraAPIKey: INFURA_API_KEY } : {}),
+  // Use the official package build from unpkg (more reliable than random doc-cdn links)
+  const MMSDK = new MetaMaskSDK.MetaMaskSDK({
+    dappMetadata: { name: "GH Pages Sepolia Test", url: location.href },
+    logging: { developerMode: true } // makes SDK more chatty in console (and sometimes events)
   });
 
   const provider = MMSDK.getProvider();
 
-  async function ensureSepolia() {
-    log("2) Switching to Sepolia…");
+  async function safeRequest(method, params) {
+    log("RPC -> " + method);
     try {
-      await provider.request({
-        method: "wallet_switchEthereumChain",
-        params: [{ chainId: SEPOLIA_CHAIN_ID_HEX }],
-      });
-      log("   Sepolia ✅");
-    } catch (err) {
-      // 4902 = unknown chain
-      if (err && err.code === 4902) {
-        log("   Sepolia not found. Adding…");
-        await provider.request({
-          method: "wallet_addEthereumChain",
-          params: [{
-            chainId: SEPOLIA_CHAIN_ID_HEX,
-            chainName: "Sepolia",
-            nativeCurrency: { name: "Sepolia ETH", symbol: "ETH", decimals: 18 },
-            rpcUrls: ["https://rpc.sepolia.org", "https://sepolia.drpc.org"],
-            blockExplorerUrls: ["https://sepolia.etherscan.io"],
-          }],
-        });
-        log("   Added Sepolia ✅");
-      } else {
-        throw err;
-      }
+      const res = await provider.request({ method, params });
+      log("RPC <- " + method + " OK");
+      return res;
+    } catch (e) {
+      log("RPC <- " + method + " ERROR: " + (e?.message || String(e)));
+      if (e?.code !== undefined) log("  code: " + e.code);
+      throw e;
     }
   }
 
-  async function send0_1(from) {
-    log("3) Sending 0.1 Sepolia ETH…");
-    const txHash = await provider.request({
-      method: "eth_sendTransaction",
-      params: [{
-        from,
-        to: TO_ADDRESS,
-        value: VALUE_WEI_HEX,
-      }],
-    });
-    log("   Sent ✅ txHash:\n   " + txHash);
-    log("   Etherscan:\n   https://sepolia.etherscan.io/tx/" + txHash);
+  async function connectFlow() {
+    line();
+    envDump();
+    line();
+
+    log("1) connect() start");
+    let accounts;
+    try {
+      accounts = await MMSDK.connect();
+      log("1) connect() returned: " + JSON.stringify(accounts));
+    } catch (e) {
+      log("1) connect() failed: " + (e?.message || String(e)));
+      if (e?.code !== undefined) log("  code: " + e.code);
+      throw e;
+    }
+
+    if (!accounts?.length) throw new Error("No accounts returned from connect().");
+    const from = accounts[0];
+
+    log("2) chainId check");
+    const chainId = await safeRequest("eth_chainId");
+    log("   current chainId: " + chainId);
+
+    log("3) switch/add Sepolia");
+    try {
+      await safeRequest("wallet_switchEthereumChain", [{ chainId: SEPOLIA_CHAIN_ID_HEX }]);
+      log("   switched to Sepolia ✅");
+    } catch (e) {
+      if (e?.code === 4902) {
+        log("   Sepolia missing, adding…");
+        await safeRequest("wallet_addEthereumChain", [{
+          chainId: SEPOLIA_CHAIN_ID_HEX,
+          chainName: "Sepolia",
+          nativeCurrency: { name: "Sepolia ETH", symbol: "ETH", decimals: 18 },
+          rpcUrls: ["https://rpc.sepolia.org", "https://sepolia.drpc.org"],
+          blockExplorerUrls: ["https://sepolia.etherscan.io"],
+        }]);
+        log("   added Sepolia ✅");
+      } else {
+        throw e;
+      }
+    }
+
+    log("4) send tx");
+    const txHash = await safeRequest("eth_sendTransaction", [{
+      from,
+      to: TO_ADDRESS,
+      value: VALUE_WEI_HEX,
+    }]);
+
+    log("✅ txHash: " + txHash);
+    log("Etherscan: https://sepolia.etherscan.io/tx/" + txHash);
   }
+
+  // Helpful lifecycle logs
+  window.addEventListener("focus", () => log("[event] window focus"));
+  window.addEventListener("blur", () => log("[event] window blur"));
+  document.addEventListener("visibilitychange", () => log("[event] visibilitychange -> " + document.visibilityState));
 
   btn.addEventListener("click", async () => {
     btn.disabled = true;
     logEl.textContent = "";
-
     try {
-      requireSDK();
-
-      log("1) Connecting…");
-      // MetaMask docs: connect() triggers cross-platform (desktop/mobile) connection, including deeplinking
-      const accounts = await MMSDK.connect();
-      if (!accounts || !accounts.length) throw new Error("No accounts returned.");
-      const from = accounts[0];
-      log("   Connected: " + from);
-
-      await ensureSepolia();
-      await send0_1(from);
-
+      await connectFlow();
     } catch (e) {
-      const msg = e?.message || String(e);
-      log("❌ Error: " + msg);
-      log("Tip: On Android, MetaMask may open for approval. Complete prompts, then come back.");
+      log("❌ Flow stopped.");
+      log("If MetaMask opened, complete prompts, then return and tap button again.");
     } finally {
       btn.disabled = false;
     }
   });
 })();
-</script>
-</body>
-</html>
+  </script>
