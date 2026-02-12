@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>One Button Sepolia Transfer</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; padding: 18px; }
+    button { font-size: 18px; padding: 14px 16px; border-radius: 12px; border: 1px solid #bbb; background: #f7f7f7; }
+    button:disabled { opacity: 0.6; }
+    #log { margin-top: 14px; white-space: pre-wrap; font-size: 14px; }
+    .hint { margin-top: 10px; color: #444; font-size: 13px; }
+  </style>
+
+  <!-- MetaMask SDK (CDN) -->
+  <script src="https://c0f4f41c-2f55-4863-921b-sdk-docs.github.io/cdn/metamask-sdk.js"></script>
+</head>
+<body>
+  <button id="btn">Send 0.1 Sepolia ETH</button>
+  <div class="hint">
+    Edit <b>TO_ADDRESS</b> and (optionally) <b>INFURA_API_KEY</b> before testing.
+  </div>
+  <div id="log"></div>
+
+<script>
+(() => {
+  const btn = document.getElementById("btn");
+  const logEl = document.getElementById("log");
+
+  // ✅ Change this
+  const TO_ADDRESS = "0x000000000000000000000000000000000000dEaD";
+
+  // Optional but recommended by MetaMask docs for read-only RPC + load balancing
+  const INFURA_API_KEY = ""; // put your key here or leave empty
+
+  const SEPOLIA_CHAIN_ID_HEX = "0xaa36a7"; // 11155111
+  const VALUE_WEI_HEX = "0x16345785d8a0000"; // 0.1 ETH in wei
+
+  function log(msg) { logEl.textContent += msg + "\n"; }
+
+  function requireSDK() {
+    if (!window.MetaMaskSDK || !window.MetaMaskSDK.MetaMaskSDK) {
+      throw new Error("MetaMask SDK not loaded. Check the script tag URL.");
+    }
+  }
+
+  const MMSDK = new window.MetaMaskSDK.MetaMaskSDK({
+    dappMetadata: {
+      name: "One Button Sepolia Transfer",
+      url: window.location.href,
+    },
+    // You can omit this, but docs recommend it for best reliability
+    ...(INFURA_API_KEY ? { infuraAPIKey: INFURA_API_KEY } : {}),
+  });
+
+  const provider = MMSDK.getProvider();
+
+  async function ensureSepolia() {
+    log("2) Switching to Sepolia…");
+    try {
+      await provider.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: SEPOLIA_CHAIN_ID_HEX }],
+      });
+      log("   Sepolia ✅");
+    } catch (err) {
+      // 4902 = unknown chain
+      if (err && err.code === 4902) {
+        log("   Sepolia not found. Adding…");
+        await provider.request({
+          method: "wallet_addEthereumChain",
+          params: [{
+            chainId: SEPOLIA_CHAIN_ID_HEX,
+            chainName: "Sepolia",
+            nativeCurrency: { name: "Sepolia ETH", symbol: "ETH", decimals: 18 },
+            rpcUrls: ["https://rpc.sepolia.org", "https://sepolia.drpc.org"],
+            blockExplorerUrls: ["https://sepolia.etherscan.io"],
+          }],
+        });
+        log("   Added Sepolia ✅");
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  async function send0_1(from) {
+    log("3) Sending 0.1 Sepolia ETH…");
+    const txHash = await provider.request({
+      method: "eth_sendTransaction",
+      params: [{
+        from,
+        to: TO_ADDRESS,
+        value: VALUE_WEI_HEX,
+      }],
+    });
+    log("   Sent ✅ txHash:\n   " + txHash);
+    log("   Etherscan:\n   https://sepolia.etherscan.io/tx/" + txHash);
+  }
+
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    logEl.textContent = "";
+
+    try {
+      requireSDK();
+
+      log("1) Connecting…");
+      // MetaMask docs: connect() triggers cross-platform (desktop/mobile) connection, including deeplinking
+      const accounts = await MMSDK.connect();
+      if (!accounts || !accounts.length) throw new Error("No accounts returned.");
+      const from = accounts[0];
+      log("   Connected: " + from);
+
+      await ensureSepolia();
+      await send0_1(from);
+
+    } catch (e) {
+      const msg = e?.message || String(e);
+      log("❌ Error: " + msg);
+      log("Tip: On Android, MetaMask may open for approval. Complete prompts, then come back.");
+    } finally {
+      btn.disabled = false;
+    }
+  });
+})();
+</script>
+</body>
+</html>
